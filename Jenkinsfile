@@ -10,41 +10,32 @@ pipeline {
     }
 
     stages {
-        stage('Checkout') {
+
+        stage('Terraform Init') {
             steps {
-                git 'https://github.com/waghepratiksha21-create/eks-cluster-deployment.git'
-            }
-        }
-    
-        stage ("terraform init") {
-            steps {
-                sh ("terraform init -reconfigure") 
-            }
-        }
-        
-        stage ("plan") {
-            steps {
-                sh ('terraform plan') 
+                sh 'terraform init -reconfigure'
             }
         }
 
-        stage (" Action") {
+        stage('Terraform Plan') {
+            steps {
+                sh 'terraform plan'
+            }
+        }
+
+        stage('Terraform Action') {
             steps {
                 script {
-                    switch (params.ACTION) {
-                        case 'apply':
-                            echo 'Executing Apply...'
-                            sh "terraform apply --auto-approve"
-                            break
-                        case 'destroy':
-                            echo 'Executing Destroy...'
-                            sh "terraform destroy --auto-approve"
-                            break
-                        default:
-                            error 'Unknown action'
+                    if (params.ACTION == 'apply') {
+                        echo 'Executing Terraform Apply...'
+                        sh 'terraform apply --auto-approve'
+                    } else if (params.ACTION == 'destroy') {
+                        echo 'Executing Terraform Destroy...'
+                        sh 'terraform destroy --auto-approve'
                     }
                 }
             }
         }
+
     }
 }
