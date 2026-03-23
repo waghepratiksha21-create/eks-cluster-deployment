@@ -10,21 +10,21 @@ pipeline {
     }
 
     environment {
-        TF_VAR_aws_region = 'ap-south-1'  // Set your AWS region
+        TF_VAR_aws_region = 'ap-south-1'  // Optional: set your AWS region
     }
 
     stages {
 
         stage('Terraform Init') {
             steps {
-                echo "Initializing Terraform..."
+                echo 'Initializing Terraform...'
                 sh 'terraform init -reconfigure'
             }
         }
 
         stage('Terraform Plan') {
             steps {
-                echo "Running Terraform Plan..."
+                echo 'Running Terraform Plan...'
                 sh 'terraform plan'
             }
         }
@@ -39,19 +39,19 @@ pipeline {
 
                     // Map AWS role names to Terraform resource names
                     def roleMap = [
-                        'eks-cluster-example-2': 'eks_cluster_example_2',
-                        'eks-node-role-2'      : 'eks_node_role_2'
+                        'eks-cluster-example-2': 'example',
+                        'eks-node-role-2'      : 'worker'
                     ]
 
                     roleMap.each { awsRoleName, tfResourceName ->
+                        // Check if role exists in AWS
                         def exists = sh(
                             script: "aws iam get-role --role-name ${awsRoleName} > /dev/null 2>&1 && echo true || echo false",
                             returnStdout: true
                         ).trim()
 
                         if (exists == 'true') {
-                            echo "Role ${awsRoleName} already exists. Importing to Terraform..."
-                            // Import safely; ignore errors if already imported
+                            echo "Role ${awsRoleName} already exists. Importing into Terraform..."
                             sh "terraform import aws_iam_role.${tfResourceName} ${awsRoleName} || echo 'Already imported'"
                         } else {
                             echo "Role ${awsRoleName} does not exist. Terraform will create it."
@@ -78,14 +78,11 @@ pipeline {
     }
 
     post {
-        always {
-            echo "Pipeline finished."
-        }
         success {
-            echo "Terraform ${params.ACTION} completed successfully."
+            echo 'Pipeline finished successfully.'
         }
         failure {
-            echo "Terraform ${params.ACTION} failed. Check logs for details."
+            echo 'Terraform action failed. Check logs for details.'
         }
     }
 }
