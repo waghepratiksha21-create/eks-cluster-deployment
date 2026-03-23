@@ -29,46 +29,34 @@ pipeline {
             }
         }
 
-        stage('Handle Existing IAM Roles') {
-            when { expression { params.ACTION == 'apply' } }
-            steps {
-                script {
-                    echo "Checking for existing IAM roles..."
-                    def roleMap = [
-                        'eks-cluster-example-2': 'example',
-                        'eks-node-role-2'      : 'worker'
-                    ]
-                    roleMap.each { awsRoleName, tfResourceName ->
-                        def exists = sh(script: "aws iam get-role --role-name ${awsRoleName} > /dev/null 2>&1 && echo true || echo false", returnStdout: true).trim()
-                        if (exists == 'true') {
-                            echo "Importing role ${awsRoleName}..."
-                            sh "terraform import aws_iam_role.${tfResourceName} ${awsRoleName} || echo 'Already imported'"
-                        }
-                    }
+       stage('Import Existing Resources') {
+    steps {
+        script {
+            // IAM roles
+            ['eks-cluster-example-2':'example', 'eks-node-role-2':'worker'].each { roleName, tfRes ->
+                def exists = sh(script: "aws iam get-role --role-name ${roleName} >/dev/null 2>&1 && echo true || echo false", returnStdout:true).trim()
+                if(exists == 'true') {
+                    echo "Importing IAM role ${roleName}..."
+                    sh "terraform import aws_iam_role.${tfRes} ${roleName} || echo 'Already imported'"
                 }
             }
-        }
 
-        stage('Handle Existing EKS Cluster & Node Group') {
-            when { expression { params.ACTION == 'apply' } }
-            steps {
-                script {
-                    echo "Checking for existing EKS cluster..."
-                    def clusterExists = sh(script: "aws eks describe-cluster --name project-cluster > /dev/null 2>&1 && echo true || echo false", returnStdout: true).trim()
-                    if (clusterExists == 'true') {
-                        echo "Importing existing EKS cluster..."
-                        sh "terraform import aws_eks_cluster.project-cluster project-cluster || echo 'Already imported'"
-                    }
+            // EKS cluster
+            def clusterExists = sh(script:"aws eks describe-cluster --name project-cluster >/dev/null 2>&1 && echo true || echo false", returnStdout:true).trim()
+            if(clusterExists == 'true'){
+                echo "Importing existing EKS cluster..."
+                sh "terraform import aws_eks_cluster.project-cluster project-cluster || echo 'Already imported'"
+            }
 
-                    echo "Checking for existing EKS node group..."
-                    def nodeGroupExists = sh(script: "aws eks describe-nodegroup --cluster-name project-cluster --nodegroup-name pc-node-group > /dev/null 2>&1 && echo true || echo false", returnStdout: true).trim()
-                    if (nodeGroupExists == 'true') {
-                        echo "Importing existing EKS node group..."
-                        sh "terraform import aws_eks_node_group.node-grp project-cluster/pc-node-group || echo 'Already imported'"
-                    }
-                }
+            // EKS node group
+            def nodeGroupExists = sh(script:"aws eks describe-nodegroup --cluster-name project-cluster --nodegroup-name pc-node-group >/dev/null 2>&1 && echo true || echo false", returnStdout:true).trim()
+            if(nodeGroupExists == 'true'){
+                echo "Importing existing EKS node group..."
+                sh "terraform import aws_eks_node_group.node-grp project-cluster/pc-node-group || echo 'Already imported'"
             }
         }
+    }
+}
 
         stage('Terraform Action') {
             steps {
