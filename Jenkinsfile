@@ -10,7 +10,7 @@ pipeline {
     }
 
     environment {
-        TF_VAR_aws_region = 'ap-south-1'  // Optional: set your AWS region
+        TF_VAR_aws_region = 'ap-south-1'
     }
 
     stages {
@@ -30,32 +30,41 @@ pipeline {
         }
 
         stage('Handle Existing IAM Roles') {
-            when {
-                expression { params.ACTION == 'apply' }
-            }
+            when { expression { params.ACTION == 'apply' } }
             steps {
                 script {
                     echo "Checking for existing IAM roles..."
-
-                    // Map AWS role names to Terraform resource names
                     def roleMap = [
                         'eks-cluster-example-2': 'example',
                         'eks-node-role-2'      : 'worker'
                     ]
-
                     roleMap.each { awsRoleName, tfResourceName ->
-                        // Check if role exists in AWS
-                        def exists = sh(
-                            script: "aws iam get-role --role-name ${awsRoleName} > /dev/null 2>&1 && echo true || echo false",
-                            returnStdout: true
-                        ).trim()
-
+                        def exists = sh(script: "aws iam get-role --role-name ${awsRoleName} > /dev/null 2>&1 && echo true || echo false", returnStdout: true).trim()
                         if (exists == 'true') {
-                            echo "Role ${awsRoleName} already exists. Importing into Terraform..."
+                            echo "Importing role ${awsRoleName}..."
                             sh "terraform import aws_iam_role.${tfResourceName} ${awsRoleName} || echo 'Already imported'"
-                        } else {
-                            echo "Role ${awsRoleName} does not exist. Terraform will create it."
                         }
+                    }
+                }
+            }
+        }
+
+        stage('Handle Existing EKS Cluster & Node Group') {
+            when { expression { params.ACTION == 'apply' } }
+            steps {
+                script {
+                    echo "Checking for existing EKS cluster..."
+                    def clusterExists = sh(script: "aws eks describe-cluster --name project-cluster > /dev/null 2>&1 && echo true || echo false", returnStdout: true).trim()
+                    if (clusterExists == 'true') {
+                        echo "Importing existing EKS cluster..."
+                        sh "terraform import aws_eks_cluster.project-cluster project-cluster || echo 'Already imported'"
+                    }
+
+                    echo "Checking for existing EKS node group..."
+                    def nodeGroupExists = sh(script: "aws eks describe-nodegroup --cluster-name project-cluster --nodegroup-name pc-node-group > /dev/null 2>&1 && echo true || echo false", returnStdout: true).trim()
+                    if (nodeGroupExists == 'true') {
+                        echo "Importing existing EKS node group..."
+                        sh "terraform import aws_eks_node_group.node-grp project-cluster/pc-node-group || echo 'Already imported'"
                     }
                 }
             }
@@ -74,15 +83,10 @@ pipeline {
                 }
             }
         }
-
     }
 
     post {
-        success {
-            echo 'Pipeline finished successfully.'
-        }
-        failure {
-            echo 'Terraform action failed. Check logs for details.'
-        }
+        success { echo 'Pipeline finished successfully.' }
+        failure { echo 'Terraform action failed. Check logs for details.' }
     }
 }
