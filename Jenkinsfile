@@ -1,103 +1,104 @@
 pipeline {
     agent any
 
-    parameters {
-        choice(
-            name: 'ACTION',
-            choices: ['apply', 'destroy'],
-            description: 'Select the action to perform'
-        )
+    environment {
+        SCANNER_HOME = tool 'sonar-scanner'
+        NVD_API_KEY = credentials('nvd-api-key')
     }
 
-    environment {
-        TF_VAR_aws_region = 'ap-south-1'
+    tools {
+        maven 'maven3'
+        jdk 'jdk17'
     }
 
     stages {
 
-        stage('Terraform Init') {
+        stage('git checkout') {
             steps {
-                echo 'Initializing Terraform...'
-                sh 'terraform init -reconfigure'
+                git branch: 'master', url: 'https://github.com/waghepratiksha21-create/Ekart.git'
             }
         }
 
-        stage('Terraform Plan') {
+        stage('compile') {
             steps {
-                echo 'Running Terraform Plan...'
-                sh 'terraform plan'
+                sh "mvn clean compile"
             }
         }
 
-        stage('Import Existing Resources') {
+        // Skip failing tests
+        stage('unit tests') {
             steps {
-                script {
+                sh "mvn test -DskipTests=true"
+            }
+        }
 
-                    // IAM Roles
-                    ['eks-cluster-example-2':'example', 'eks-node-role-2':'worker'].each { roleName, tfRes ->
-
-                        def inState = sh(script: "terraform state list | grep aws_iam_role.${tfRes} || true", returnStdout:true).trim()
-
-                        if(!inState) {
-                            def exists = sh(script: "aws iam get-role --role-name ${roleName} >/dev/null 2>&1 && echo true || echo false", returnStdout:true).trim()
-
-                            if(exists == 'true') {
-                                echo "Importing IAM role ${roleName}..."
-                                sh "terraform import aws_iam_role.${tfRes} ${roleName}"
-                            }
-                        } else {
-                            echo "IAM role ${roleName} already managed by Terraform"
-                        }
-                    }
-
-                    // EKS Cluster
-                    def clusterState = sh(script: "terraform state list | grep aws_eks_cluster.project-cluster || true", returnStdout:true).trim()
-
-                    if(!clusterState){
-                        def clusterExists = sh(script:"aws eks describe-cluster --name project-cluster >/dev/null 2>&1 && echo true || echo false", returnStdout:true).trim()
-
-                        if(clusterExists == 'true'){
-                            echo "Importing existing EKS cluster..."
-                            sh "terraform import aws_eks_cluster.project-cluster project-cluster"
-                        }
-                    } else {
-                        echo "EKS cluster already managed by Terraform"
-                    }
-
-                    // Node Group
-                    def nodeState = sh(script: "terraform state list | grep aws_eks_node_group.node-grp || true", returnStdout:true).trim()
-
-                    if(!nodeState){
-                        def nodeGroupExists = sh(script:"aws eks describe-nodegroup --cluster-name project-cluster --nodegroup-name pc-node-group >/dev/null 2>&1 && echo true || echo false", returnStdout:true).trim()
-
-                        if(nodeGroupExists == 'true'){
-                            echo "Importing existing EKS node group..."
-                            sh "terraform import aws_eks_node_group.node-grp project-cluster/pc-node-group"
-                        }
-                    } else {
-                        echo "Node group already managed by Terraform"
-                    }
+        stage('SonarQube analysis') {
+            steps {
+                withSonarQubeEnv('sonar-scanner') {
+                    sh """
+                    ${SCANNER_HOME}/bin/sonar-scanner \
+                    -Dsonar.projectKey=EKART \
+                    -Dsonar.projectName=EKART \
+                    -Dsonar.sources=. \
+                    -Dsonar.java.binaries=target/classes
+                    """
                 }
             }
         }
 
-        stage('Terraform Action') {
+        stage('OWASP Dependency Check') {
             steps {
-                script {
-                    if (params.ACTION == 'apply') {
-                        echo 'Executing Terraform Apply...'
-                        sh 'terraform apply --auto-approve'
-                    } else if (params.ACTION == 'destroy') {
-                        echo 'Executing Terraform Destroy...'
-                        sh 'terraform destroy --auto-approve'
-                    }
+                withCredentials([string(credentialsId: 'nvd-api-key', variable: 'NVD_API_KEY')]) {
+                    dependencyCheck additionalArguments: "--nvdApiKey=${NVD_API_KEY}",
+                                    odcInstallation: 'DC'
                 }
             }
         }
-    }
 
-    post {
-        success { echo 'Pipeline finished successfully.' }
-        failure { echo 'Terraform action failed. Check logs for details.' }
+        stage('Build') {
+            steps {
+                sh "mvn clean package -DskipTests"
+            }
+        }
+
+        stage('deploy to Nexus') {
+            steps {
+                withMaven(
+                    globalMavenSettingsConfig: 'global-maven',
+                    jdk: 'jdk17',
+                    maven: 'maven3',
+                    traceability: true
+                ) {
+                    sh "mvn deploy -DskipTests"
+                }
+            }
+        }
+
+        stage('build and Tag docker image') {
+            steps {
+                sh "docker build -t waghepratiksha21/ekart:latest -f docker/Dockerfile ."
+            }
+        }
+
+        stage('Push image to Hub'){
+            steps{
+                withCredentials([string(credentialsId: 'dockerhub-pwd', variable: 'dockerhubpwd')]) {
+                    sh "docker login -u waghepratiksha21 -p ${dockerhubpwd}"
+                }
+                sh "docker push waghepratiksha21/ekart:latest"
+            }
+        }
+
+        stage('EKS and Kubectl configuration'){
+            steps{
+                sh 'aws eks update-kubeconfig --region ap-south-1 --name project-cluster'
+            }
+        }
+
+        stage('Deploy to k8s'){
+            steps{
+                sh 'kubectl apply -f deploymentservice.yml'
+            }
+        }
     }
 }
